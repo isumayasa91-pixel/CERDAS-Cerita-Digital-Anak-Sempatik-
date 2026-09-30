@@ -17,15 +17,33 @@ app.use(express.json({ limit: '50mb' }));
 const DB_DIR = process.env.VERCEL ? '/tmp' : path.join(__dirname, 'data');
 const DB_PATH = path.join(DB_DIR, 'db.json');
 
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
+let activeDbPath = DB_PATH;
+
+try {
+  if (!fs.existsSync(DB_DIR)) {
+    fs.mkdirSync(DB_DIR, { recursive: true });
+  }
+  // Test write permission in DB_DIR
+  const testFile = path.join(DB_DIR, '.test-write');
+  fs.writeFileSync(testFile, 'test');
+  fs.unlinkSync(testFile);
+} catch (err) {
+  console.warn(`[DB PATH FALLBACK] Directory ${DB_DIR} is read-only or permission denied. Falling back to /tmp/db.json`);
+  activeDbPath = '/tmp/db.json';
 }
 
 // Initial Mock Data Seeding
 const DEFAULT_STUDENTS = [
-  { id: 'budi', name: 'Budi Setiawan', class: 'Kelas 4A', avatar: '👦', status: 'Aktif' },
-  { id: 'siti', name: 'Siti Rahma', class: 'Kelas 4A', avatar: '👧', status: 'Aktif' },
-  { id: 'andi', name: 'Andi Prasetyo', class: 'Kelas 4B', avatar: '🧑', status: 'Aktif' },
+  { id: 'budi', name: 'Budi Setiawan', class: 'Kelas VII A', avatar: '👦', status: 'Aktif', guruWali: 'Ibu Rahma, S.Pd' },
+  { id: 'siti', name: 'Siti Rahma', class: 'Kelas VII A', avatar: '👧', status: 'Aktif', guruWali: 'Ibu Rahma, S.Pd' },
+  { id: 'andi', name: 'Andi Prasetyo', class: 'Kelas VIII B', avatar: '🧑', status: 'Aktif', guruWali: 'Bapak I Sumayasa, M.Pd' },
+];
+
+const DEFAULT_TEACHERS = [
+  { id: 't-1', name: 'Ibu Rahma, S.Pd', email: 'rahma@cerdas.id', password: 'password123', class: 'Kelas VII' },
+  { id: 't-2', name: 'Bapak I Sumayasa, M.Pd', email: 'isumayasa91@guru.smp.belajar.id', password: 'password123', class: 'Kelas VIII' },
+  { id: 't-3', name: 'Bapak Deni Saputra, S.Pd', email: 'deni@cerdas.id', password: 'password123', class: 'Kelas IX' },
+  { id: 't-4', name: 'Ibu Sri Wahyuni, S.Pd', email: 'sri@cerdas.id', password: 'password123', class: 'Umum' },
 ];
 
 const DEFAULT_STORIES = [
@@ -115,23 +133,28 @@ const DEFAULT_STORIES = [
 // Helper to read database
 function readDB() {
   try {
-    if (!fs.existsSync(DB_PATH)) {
-      const initialData = { students: DEFAULT_STUDENTS, stories: DEFAULT_STORIES };
-      fs.writeFileSync(DB_PATH, JSON.stringify(initialData, null, 2), 'utf-8');
+    if (!fs.existsSync(activeDbPath)) {
+      const initialData = { students: DEFAULT_STUDENTS, stories: DEFAULT_STORIES, teachers: DEFAULT_TEACHERS };
+      fs.writeFileSync(activeDbPath, JSON.stringify(initialData, null, 2), 'utf-8');
       return initialData;
     }
-    const data = fs.readFileSync(DB_PATH, 'utf-8');
-    return JSON.parse(data);
+    const data = fs.readFileSync(activeDbPath, 'utf-8');
+    const db = JSON.parse(data);
+    if (!db.teachers) {
+      db.teachers = DEFAULT_TEACHERS;
+      fs.writeFileSync(activeDbPath, JSON.stringify(db, null, 2), 'utf-8');
+    }
+    return db;
   } catch (error) {
     console.error("Error reading database:", error);
-    return { students: DEFAULT_STUDENTS, stories: DEFAULT_STORIES };
+    return { students: DEFAULT_STUDENTS, stories: DEFAULT_STORIES, teachers: DEFAULT_TEACHERS };
   }
 }
 
 // Helper to write database
 function writeDB(data: any) {
   try {
-    fs.writeFileSync(DB_PATH, JSON.stringify(data, null, 2), 'utf-8');
+    fs.writeFileSync(activeDbPath, JSON.stringify(data, null, 2), 'utf-8');
   } catch (error) {
     console.error("Error writing database:", error);
   }
@@ -161,6 +184,49 @@ if (GEMINI_API_KEY && GEMINI_API_KEY !== 'MY_GEMINI_API_KEY') {
 
 // --- API Endpoints ---
 
+// Get all teachers
+app.get('/api/teachers', (req, res) => {
+  const db = readDB();
+  res.json(db.teachers || DEFAULT_TEACHERS);
+});
+
+// Teacher Register
+app.post('/api/teachers/register', (req, res) => {
+  const { name, email, password, className } = req.body;
+  if (!name || !email || !password || !className) {
+    return res.status(400).json({ error: 'Semua kolom wajib diisi' });
+  }
+  const db = readDB();
+  const exists = db.teachers.some((t: any) => t.email.toLowerCase() === email.toLowerCase());
+  if (exists) {
+    return res.status(400).json({ error: 'Email sudah terdaftar' });
+  }
+  const newTeacher = {
+    id: 'teacher_' + Date.now(),
+    name,
+    email: email.toLowerCase(),
+    password,
+    class: className
+  };
+  db.teachers.push(newTeacher);
+  writeDB(db);
+  res.json({ success: true, teacher: { id: newTeacher.id, name: newTeacher.name, email: newTeacher.email, class: newTeacher.class } });
+});
+
+// Teacher Login
+app.post('/api/teachers/login', (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email dan password wajib diisi' });
+  }
+  const db = readDB();
+  const teacher = db.teachers.find((t: any) => t.email.toLowerCase() === email.toLowerCase() && t.password === password);
+  if (!teacher) {
+    return res.status(400).json({ error: 'Email atau password salah' });
+  }
+  res.json({ success: true, teacher: { id: teacher.id, name: teacher.name, email: teacher.email, class: teacher.class } });
+});
+
 // 1. Get all students
 app.get('/api/students', (req, res) => {
   const db = readDB();
@@ -169,7 +235,7 @@ app.get('/api/students', (req, res) => {
 
 // 2. Add a student
 app.post('/api/students', (req, res) => {
-  const { name, className, avatar } = req.body;
+  const { name, className, avatar, guruWali } = req.body;
   if (!name || !className) {
     return res.status(400).json({ error: 'Nama dan Kelas wajib diisi' });
   }
@@ -179,7 +245,8 @@ app.post('/api/students', (req, res) => {
     name,
     class: className,
     avatar: avatar || '👦',
-    status: 'Aktif'
+    status: 'Aktif',
+    guruWali: guruWali || 'Ibu Rahma, S.Pd'
   };
   db.students.push(newStudent);
   writeDB(db);

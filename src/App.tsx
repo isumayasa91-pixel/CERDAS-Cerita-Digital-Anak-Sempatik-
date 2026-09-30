@@ -224,6 +224,7 @@ export default function App() {
   const [teacherReplyText, setTeacherReplyText] = useState('');
   const [customEscalateNote, setCustomEscalateNote] = useState('');
   const [showEscalateModal, setShowEscalateModal] = useState(false);
+  const [activeGuruWaliFilter, setActiveGuruWaliFilter] = useState<string>('Semua');
 
   // Guru BK & Orang Tua dashboard state
   const [bkSearch, setBkSearch] = useState('');
@@ -234,6 +235,20 @@ export default function App() {
   const [newStudentName, setNewStudentName] = useState('');
   const [newStudentClass, setNewStudentClass] = useState('Kelas VII A');
   const [newStudentAvatar, setNewStudentAvatar] = useState('👦');
+  const [newStudentGuruWali, setNewStudentGuruWali] = useState('Ibu Rahma, S.Pd');
+
+  // Teacher Authentication States
+  const [currentTeacher, setCurrentTeacher] = useState<any>(() => {
+    const saved = localStorage.getItem('currentTeacher');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [authName, setAuthName] = useState('');
+  const [authClass, setAuthClass] = useState('Kelas VII');
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
 
   // Load Initial Data
   const loadData = async () => {
@@ -534,7 +549,8 @@ export default function App() {
         body: JSON.stringify({
           name: newStudentName,
           className: newStudentClass,
-          avatar: newStudentAvatar
+          avatar: newStudentAvatar,
+          guruWali: newStudentGuruWali
         })
       });
       const newStud = await res.json();
@@ -574,17 +590,108 @@ export default function App() {
     }
   };
 
+  // Handle Teacher Login
+  const handleTeacherLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authEmail.trim() || !authPassword.trim()) {
+      setAuthError('Email dan password wajib diisi');
+      return;
+    }
+    setAuthError('');
+    setAuthLoading(true);
+    try {
+      const res = await fetch('/api/teachers/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: authEmail, password: authPassword })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setCurrentTeacher(data.teacher);
+        localStorage.setItem('currentTeacher', JSON.stringify(data.teacher));
+        setActiveGuruWaliFilter(data.teacher.name);
+        setAuthEmail('');
+        setAuthPassword('');
+        playTone(523.25, 'sine', 0.15);
+      } else {
+        setAuthError(data.error || 'Email atau password salah');
+      }
+    } catch (err) {
+      console.error(err);
+      setAuthError('Gagal melakukan login. Silakan coba kembali.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Handle Teacher Register
+  const handleTeacherRegister = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!authName.trim() || !authEmail.trim() || !authPassword.trim() || !authClass.trim()) {
+      setAuthError('Semua kolom wajib diisi');
+      return;
+    }
+    setAuthError('');
+    setAuthLoading(true);
+    try {
+      const res = await fetch('/api/teachers/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: authName,
+          email: authEmail,
+          password: authPassword,
+          className: authClass
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        // Auto login after register
+        setCurrentTeacher(data.teacher);
+        localStorage.setItem('currentTeacher', JSON.stringify(data.teacher));
+        setActiveGuruWaliFilter(data.teacher.name);
+        setAuthName('');
+        setAuthEmail('');
+        setAuthPassword('');
+        setAuthMode('login');
+        playTone(523.25, 'sine', 0.15);
+      } else {
+        setAuthError(data.error || 'Pendaftaran gagal');
+      }
+    } catch (err) {
+      console.error(err);
+      setAuthError('Gagal mendaftar. Silakan coba kembali.');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Handle Teacher Logout
+  const handleTeacherLogout = () => {
+    setCurrentTeacher(null);
+    localStorage.removeItem('currentTeacher');
+    setActiveGuruWaliFilter('Semua');
+    playTone(220, 'sine', 0.1);
+  };
+
+  // Filtered lists for the active teacher (Guru Wali)
+  const teacherStudents = students.filter(st => activeGuruWaliFilter === 'Semua' || st.guruWali === activeGuruWaliFilter);
+  const teacherStories = stories.filter(story => {
+    const student = students.find(st => st.id === story.studentId);
+    return activeGuruWaliFilter === 'Semua' || (student && student.guruWali === activeGuruWaliFilter);
+  });
+
   // Student specific history
   const studentStories = stories.filter(s => s.studentId === selectedStudent?.id);
 
   // Statistics Calculation
-  const latestStoriesCount = stories.length;
-  const moodCounts = stories.reduce((acc: any, curr) => {
+  const latestStoriesCount = teacherStories.length;
+  const moodCounts = teacherStories.reduce((acc: any, curr) => {
     acc[curr.feeling] = (acc[curr.feeling] || 0) + 1;
     return acc;
   }, {});
 
-  const activeEscalatedStories = stories.filter(s => s.escalated && s.status !== 'Teratasi');
+  const activeEscalatedStories = teacherStories.filter(s => s.escalated && s.status !== 'Teratasi');
 
   // Selected feeling character details
   const currentCharacter = CHARACTERS.find(c => c.emotion === selectedFeeling) || CHARACTERS[0];
@@ -721,7 +828,9 @@ export default function App() {
                         <span className="text-2xl bg-white/20 p-1.5 rounded-lg">{st.avatar}</span>
                         <div className="truncate">
                           <p className="font-bold text-sm leading-tight">{st.name}</p>
-                          <p className={`text-xs ${selectedStudent?.id === st.id ? 'text-white/80' : 'text-slate-500'}`}>{st.class}</p>
+                          <p className={`text-[10px] ${selectedStudent?.id === st.id ? 'text-white/85' : 'text-slate-500'}`}>
+                            {st.class} · Wali: {st.guruWali ? st.guruWali.split(',')[0] : 'Umum'}
+                          </p>
                         </div>
                       </button>
                       <button
@@ -1364,8 +1473,149 @@ export default function App() {
         {/* ==================================================================== */}
         {/* ROLE: GURU WALI (CLASS TEACHER)                                      */}
         {/* ==================================================================== */}
-        {role === 'guru_wali' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {role === 'guru_wali' && !currentTeacher && (
+          <div className="max-w-md w-full mx-auto my-8 bg-white border border-slate-200 rounded-3xl p-6 md:p-8 shadow-sm flex flex-col gap-6 animate-fade-in">
+            <div className="text-center flex flex-col gap-2">
+              <span className="text-5xl mx-auto p-4 bg-sky-50 rounded-full w-20 h-20 flex items-center justify-center border border-sky-100">👩‍🏫</span>
+              <h3 className="text-xl font-extrabold text-slate-800">Ruang Guru Wali Kelas</h3>
+              <p className="text-xs text-slate-500 font-medium">
+                {authMode === 'login' 
+                  ? 'Masuk dengan email Anda untuk mengelola bimbingan & jurnal emosi siswa.' 
+                  : 'Daftarkan akun guru baru untuk mulai mendampingi jurnal emosi siswa.'}
+              </p>
+            </div>
+
+            {authError && (
+              <div className="bg-red-50 border border-red-200 text-red-700 text-xs font-bold p-3.5 rounded-xl">
+                ⚠️ {authError}
+              </div>
+            )}
+
+            <form onSubmit={authMode === 'login' ? handleTeacherLogin : handleTeacherRegister} className="flex flex-col gap-4">
+              {authMode === 'register' && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-slate-600">Nama Lengkap & Gelar:</label>
+                  <input
+                    type="text"
+                    required
+                    value={authName}
+                    onChange={(e) => setAuthName(e.target.value)}
+                    placeholder="Contoh: Bapak I Sumayasa, M.Pd"
+                    className="px-3.5 py-2.5 border-2 border-slate-200 rounded-xl bg-white text-xs font-medium focus:outline-none focus:border-sky-500"
+                  />
+                </div>
+              )}
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-slate-600">Alamat Email:</label>
+                <input
+                  type="email"
+                  required
+                  value={authEmail}
+                  onChange={(e) => setAuthEmail(e.target.value)}
+                  placeholder="Contoh: isumayasa91@guru.smp.belajar.id"
+                  className="px-3.5 py-2.5 border-2 border-slate-200 rounded-xl bg-white text-xs font-medium focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="text-xs font-bold text-slate-600">Kata Sandi:</label>
+                <input
+                  type="password"
+                  required
+                  value={authPassword}
+                  onChange={(e) => setAuthPassword(e.target.value)}
+                  placeholder="••••••••"
+                  className="px-3.5 py-2.5 border-2 border-slate-200 rounded-xl bg-white text-xs font-medium focus:outline-none focus:border-sky-500"
+                />
+              </div>
+
+              {authMode === 'register' && (
+                <div className="flex flex-col gap-1.5">
+                  <label className="text-xs font-bold text-slate-600">Wali Kelas Tingkat:</label>
+                  <select
+                    value={authClass}
+                    onChange={(e) => setAuthClass(e.target.value)}
+                    className="px-3.5 py-2.5 border-2 border-slate-200 rounded-xl bg-white text-xs font-bold text-slate-700 focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="Kelas VII">Kelas VII</option>
+                    <option value="Kelas VIII">Kelas VIII</option>
+                    <option value="Kelas IX">Kelas IX</option>
+                    <option value="Umum">Umum</option>
+                  </select>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={authLoading}
+                className="mt-2 py-3 bg-sky-500 hover:bg-sky-400 text-white font-extrabold text-sm rounded-xl shadow-md transition-colors flex items-center justify-center gap-2"
+              >
+                {authLoading ? (
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                ) : (
+                  authMode === 'login' ? 'Masuk Sekarang' : 'Daftar Akun Baru'
+                )}
+              </button>
+            </form>
+
+            <div className="text-center text-xs text-slate-500 border-t border-slate-100 pt-4 flex items-center justify-center gap-1.5">
+              <span>{authMode === 'login' ? 'Belum punya akun?' : 'Sudah punya akun?'}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setAuthMode(authMode === 'login' ? 'register' : 'login');
+                  setAuthError('');
+                }}
+                className="text-sky-600 font-extrabold hover:underline"
+              >
+                {authMode === 'login' ? 'Daftar di Sini' : 'Masuk di Sini'}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {role === 'guru_wali' && currentTeacher && (
+          <div className="flex flex-col gap-6 w-full animate-fade-in">
+            {/* Teacher Selection Profile Banner */}
+            <div className="bg-white border border-slate-200 p-5 rounded-2xl shadow-sm flex flex-col md:flex-row items-center justify-between gap-4">
+              <div className="flex items-center gap-3.5">
+                <span className="text-3xl bg-sky-50 p-2.5 rounded-xl border border-sky-100">👩‍🏫</span>
+                <div>
+                  <h3 className="font-extrabold text-slate-800 text-sm md:text-base">Halo, {currentTeacher.name}! 👋</h3>
+                  <p className="text-xs text-slate-500">Anda masuk sebagai Guru Wali {currentTeacher.class}. Menampilkan siswa asuhan Anda secara langsung.</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3.5 self-stretch md:self-auto justify-between border-t md:border-t-0 pt-3 md:pt-0 border-slate-100">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-600 whitespace-nowrap">Filter:</span>
+                  <select
+                    value={activeGuruWaliFilter}
+                    onChange={(e) => {
+                      setActiveGuruWaliFilter(e.target.value);
+                      setActiveStoryDetail(null);
+                      playTone(440, 'sine', 0.1);
+                    }}
+                    className="px-3.5 py-2 border-2 border-slate-200 rounded-xl bg-white text-xs font-bold text-slate-700 focus:outline-none focus:border-sky-500"
+                  >
+                    <option value="Semua">Semua Guru Wali (Administrator)</option>
+                    <option value={currentTeacher.name}>{currentTeacher.name} (Asuhan Anda)</option>
+                    <option value="Ibu Rahma, S.Pd">Ibu Rahma, S.Pd (Kelas VII)</option>
+                    <option value="Bapak I Sumayasa, M.Pd">Bapak I Sumayasa, M.Pd (Kelas VIII)</option>
+                    <option value="Bapak Deni Saputra, S.Pd">Bapak Deni Saputra, S.Pd (Kelas IX)</option>
+                    <option value="Ibu Sri Wahyuni, S.Pd">Ibu Sri Wahyuni, S.Pd (Umum)</option>
+                  </select>
+                </div>
+                <button
+                  onClick={handleTeacherLogout}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl border border-slate-200 transition-colors whitespace-nowrap"
+                >
+                  Keluar 🚪
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             
             {/* LEFT COLUMN: Class statistics & Student Mood Rings */}
             <div className="lg:col-span-4 flex flex-col gap-6">
@@ -1417,8 +1667,8 @@ export default function App() {
                   <span>🎯</span> Pantauan Emosi Harian Murid
                 </h3>
                 <div className="flex flex-col gap-2">
-                  {students.map((st) => {
-                    const stStory = stories.find(s => s.studentId === st.id);
+                  {teacherStudents.map((st) => {
+                    const stStory = teacherStories.find(s => s.studentId === st.id);
                     const lastChar = stStory ? CHARACTERS.find(c => c.id === stStory.character) : null;
                     
                     return (
@@ -1434,18 +1684,28 @@ export default function App() {
                           </div>
                         </div>
 
-                        {lastChar ? (
-                          <div className="flex items-center gap-2">
-                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${lastChar.bubbleColor}`}>
-                              {stStory.feeling}
-                            </span>
-                            <div className="w-8 h-8">
-                              {React.cloneElement(lastChar.svg, { className: 'w-8 h-8' })}
+                        <div className="flex items-center gap-2">
+                          {lastChar ? (
+                            <div className="flex items-center gap-2">
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${lastChar.bubbleColor}`}>
+                                {stStory.feeling}
+                              </span>
+                              <div className="w-8 h-8">
+                                {React.cloneElement(lastChar.svg, { className: 'w-8 h-8' })}
+                              </div>
                             </div>
-                          </div>
-                        ) : (
-                          <span className="text-[10px] text-slate-400 italic">Belum bercerita</span>
-                        )}
+                          ) : (
+                            <span className="text-[10px] text-slate-400 italic mr-1">Belum bercerita</span>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteStudent(st.id, st.name)}
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors focus:outline-none"
+                            title="Hapus Akun Siswa"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -1492,7 +1752,7 @@ export default function App() {
 
               {/* Feed List */}
               <div className="flex flex-col gap-4">
-                {stories
+                {teacherStories
                   .filter(s => filterStatus === 'Semua' || s.status === filterStatus)
                   .filter(s => filterRisk === 'Semua' || s.analysis?.tingkat_risiko === filterRisk)
                   .map((story) => {
@@ -1672,6 +1932,7 @@ export default function App() {
 
             </div>
 
+          </div>
           </div>
         )}
 
@@ -1956,6 +2217,20 @@ export default function App() {
                     ))}
                   </div>
                 </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <label className="font-bold text-slate-600">Guru Wali Kelas:</label>
+                <select
+                  value={newStudentGuruWali}
+                  onChange={(e) => setNewStudentGuruWali(e.target.value)}
+                  className="px-3.5 py-2.5 border-2 border-slate-200 rounded-xl bg-white focus:outline-none font-medium"
+                >
+                  <option value="Ibu Rahma, S.Pd">Ibu Rahma, S.Pd (Kelas VII)</option>
+                  <option value="Bapak I Sumayasa, M.Pd">Bapak I Sumayasa, M.Pd (Kelas VIII)</option>
+                  <option value="Bapak Deni Saputra, S.Pd">Bapak Deni Saputra, S.Pd (Kelas IX)</option>
+                  <option value="Ibu Sri Wahyuni, S.Pd">Ibu Sri Wahyuni, S.Pd (Umum)</option>
+                </select>
               </div>
 
               <div className="flex gap-2.5 justify-end mt-4">
